@@ -30,10 +30,26 @@ function rawUrl(tour: TourKey, file: string) {
 }
 
 async function fetchCsv(url: string): Promise<Record<string, string>[]> {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Échec du téléchargement ${url} (${res.status})`);
-  const text = await res.text();
-  return parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true });
+  const attempts = 3;
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) {
+        // GitHub raw renvoie parfois des erreurs transitoires (404/429/5xx)
+        // sous charge — on retente avant d'abandonner.
+        throw new Error(`Échec du téléchargement ${url} (${res.status})`);
+      }
+      const text = await res.text();
+      return parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true });
+    } catch (err) {
+      lastError = err;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 function normalizeName(s: string): string {
