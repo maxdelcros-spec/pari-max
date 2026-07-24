@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  background-color: #07090C;
+  color: #F3F5F7;
+}
+
+body {
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+::selection {
+  background: rgba(18, 184, 134, 0.35);
+}
+
+/* Scrollbars, cohérence "trading terminal" */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #0B0E13; }
+::-webkit-scrollbar-thumb { background: #242C39; border-radius: 8px; border: 2px solid #0B0E13; }
+::-webkit-scrollbar-thumb:hover { background: #2E3947; }
+
+.tabular-nums { font-variant-numeric: tabular-nums; }
+
+.bg-noise {
+  background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.035) 1px, transparent 0);
+  background-size: 22px 22px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
