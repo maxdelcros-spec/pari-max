@@ -4,7 +4,7 @@ import { useEffect, useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Search, UserPlus, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Player, Surface, Tour, TourCategory } from "@/lib/types";
+import type { Player, Surface, TourCategory } from "@/lib/types";
 import { createMatch } from "@/lib/actions/matches";
 import { searchPlayersAction } from "@/lib/actions/players";
 
@@ -20,7 +20,7 @@ function slug(s: string) {
 const CATEGORIES: TourCategory[] = ["ATP250", "ATP500", "ATP1000", "WTA250", "WTA500", "WTA1000", "GrandSlam"];
 const SURFACES: Surface[] = ["Hard", "Clay", "Grass", "Indoor Hard"];
 
-function tourFromCategory(c: TourCategory): Tour {
+function tourFromCategory(c: TourCategory): "ATP" | "WTA" {
   return c.startsWith("WTA") ? "WTA" : "ATP";
 }
 
@@ -31,7 +31,7 @@ function PlayerPicker({
   onChange,
 }: {
   label: string;
-  tour: Tour;
+  tour: "ATP" | "WTA";
   value: Player | null;
   onChange: (p: Player | null) => void;
 }) {
