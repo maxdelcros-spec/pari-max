@@ -7,7 +7,9 @@ import type { Player } from "@/lib/types";
 export async function searchPlayersAction(query: string): Promise<Player[]> {
   try {
     return await dataProvider.searchPlayers(query);
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[searchPlayersAction] échec:", err);
     return [];
   }
 }
@@ -16,7 +18,9 @@ export async function searchPlayersAction(query: string): Promise<Player[]> {
 export async function getPlayerLiveStatsAction(id: string): Promise<Player | null> {
   try {
     return await dataProvider.getPlayerById(id);
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[getPlayerLiveStatsAction] échec:", err);
     return null;
   }
 }

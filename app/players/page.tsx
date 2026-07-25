@@ -12,7 +12,9 @@ export default async function PlayersPage() {
 
   try {
     players = await dataProvider.searchPlayers("");
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error("[players/page] échec searchPlayers:", err);
     loadError =
       "Impossible de récupérer la liste des joueurs pour le moment (source de données indisponible ou trop lente). Réessaie dans quelques instants.";
   }
