@@ -51,7 +51,12 @@ async function fetchCsv(urls: string | string[]): Promise<Record<string, string>
     const attempts = 2;
     for (let i = 0; i < attempts; i++) {
       try {
-        const res = await fetch(url, { cache: "no-store" });
+        // Les fichiers bio/classement sont volumineux (plusieurs dizaines
+        // de milliers de lignes) : on les met en cache 1h côté Vercel pour
+        // éviter de retélécharger + reparser à chaque requête, ce qui peut
+        // dépasser le temps limite d'une fonction serverless. Les résultats
+        // de matchs (calcul de forme) restent "no-store" ailleurs si besoin.
+        const res = await fetch(url, { next: { revalidate: 3600 } });
         if (!res.ok) {
           throw new Error(`Échec du téléchargement ${url} (${res.status})`);
         }
