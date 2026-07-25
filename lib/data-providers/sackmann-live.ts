@@ -29,25 +29,42 @@ function rawUrl(tour: TourKey, file: string) {
   return `https://raw.githubusercontent.com/JeffSackmann/${REPO[tour]}/master/${file}`;
 }
 
-async function fetchCsv(url: string): Promise<Record<string, string>[]> {
-  const attempts = 3;
+function jsdelivrUrl(tour: TourKey, file: string) {
+  return `https://cdn.jsdelivr.net/gh/JeffSackmann/${REPO[tour]}@master/${file}`;
+}
+
+/**
+ * jsDelivr est essayé en premier : c'est un CDN public fait pour ce genre
+ * d'usage, beaucoup moins susceptible d'être bloqué que les requêtes
+ * automatisées directes vers raw.githubusercontent.com depuis une
+ * infrastructure cloud partagée (Vercel). raw.githubusercontent reste en
+ * secours si jsDelivr est indisponible ou pas encore synchronisé.
+ */
+function sourceUrls(tour: TourKey, file: string): string[] {
+  return [jsdelivrUrl(tour, file), rawUrl(tour, file)];
+}
+
+async function fetchCsv(urls: string | string[]): Promise<Record<string, string>[]> {
+  const candidates = Array.isArray(urls) ? urls : [urls];
   let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      const res = await fetch(url, { cache: "no-store" });
-      if (!res.ok) {
-        // GitHub raw renvoie parfois des erreurs transitoires (404/429/5xx)
-        // sous charge — on retente avant d'abandonner.
-        throw new Error(`Échec du téléchargement ${url} (${res.status})`);
-      }
-      const text = await res.text();
-      return parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true });
-    } catch (err) {
-      lastError = err;
-      if (i < attempts - 1) {
-        await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+  for (const url of candidates) {
+    const attempts = 2;
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(url, { cache: "no-store" });
+        if (!res.ok) {
+          throw new Error(`Échec du téléchargement ${url} (${res.status})`);
+        }
+        const text = await res.text();
+        return parse(text, { columns: true, skip_empty_lines: true, relax_column_count: true });
+      } catch (err) {
+        lastError = err;
+        if (i < attempts - 1) {
+          await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+        }
       }
     }
+    // On passe à la source suivante (ex: jsDelivr -> raw.githubusercontent)
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
@@ -132,8 +149,8 @@ interface RankingRow {
 export async function getTopPlayers(tour: TourKey, limit = TOP_N): Promise<Player[]> {
   const prefix = PREFIX[tour];
   const [players, rankings] = await Promise.all([
-    fetchCsv(rawUrl(tour, `${prefix}_players.csv`)),
-    fetchCsv(rawUrl(tour, `${prefix}_rankings_current.csv`)),
+    fetchCsv(sourceUrls(tour, `${prefix}_players.csv`)),
+    fetchCsv(sourceUrls(tour, `${prefix}_rankings_current.csv`)),
   ]);
 
   const maxDate = (rankings as unknown as RankingRow[]).reduce(
@@ -182,7 +199,70 @@ export async function searchTopPlayers(query: string, limit = TOP_N): Promise<Pl
   const all = [...atp, ...wta];
   const q = query.trim().toLowerCase();
   if (!q) return all;
-  return all.filter((p) => p.name.toLowerCase().includes(q) || p.country.toLowerCase().includes(q));
+  const matches = all.filter((p) => p.name.toLowerCase().includes(q) || p.country.toLowerCase().includes(q));
+  if (matches.length > 0 || q.length < 3) return matches;
+
+  // Rien trouvé dans le top 400 actuel : le joueur existe peut-être quand
+  // même dans la base Sackmann (classé plus bas, en Challenger/ITF, ou
+  // inactif). On élargit la recherche à TOUTE la base de joueurs (chaque
+  // tour en contient plusieurs dizaines de milliers, passés et présents).
+  const [atpWide, wtaWide] = await Promise.all([
+    searchFullPlayerDatabase("ATP", q),
+    searchFullPlayerDatabase("WTA", q),
+  ]);
+  return [...atpWide, ...wtaWide];
+}
+
+/**
+ * Recherche élargie : parcourt tout le fichier bio (pas seulement le top
+ * 400 classé). Le classement, quand connu, est repris du fichier de
+ * classement courant ; sinon le joueur est renvoyé avec un classement
+ * "hors top" et des stats neutres (pas de calcul de forme pour cette liste,
+ * uniquement au moment de la sélection — voir getPlayerLiveStats).
+ */
+async function searchFullPlayerDatabase(tour: TourKey, q: string, limit = 15): Promise<Player[]> {
+  const prefix = PREFIX[tour];
+  const [players, rankings] = await Promise.all([
+    fetchCsv(sourceUrls(tour, `${prefix}_players.csv`)),
+    fetchCsv(sourceUrls(tour, `${prefix}_rankings_current.csv`)),
+  ]);
+
+  const maxDate = (rankings as unknown as RankingRow[]).reduce(
+    (max, r) => (r.ranking_date > max ? r.ranking_date : max),
+    ""
+  );
+  const rankByPlayer = new Map<string, number>();
+  for (const r of rankings as unknown as RankingRow[]) {
+    if (r.ranking_date === maxDate) rankByPlayer.set(r.player, num(r.rank, 9999));
+  }
+
+  const out: Player[] = [];
+  for (const sp of players as unknown as SackmannPlayerRow[]) {
+    const name = `${sp.name_first ?? ""} ${sp.name_last ?? ""}`.trim();
+    if (!name || !name.toLowerCase().includes(q)) continue;
+
+    const dob = sp.dob && sp.dob.length === 8 ? sp.dob : null;
+    const age = dob
+      ? Math.floor(
+          (Date.now() - Date.UTC(Number(dob.slice(0, 4)), Number(dob.slice(4, 6)) - 1, Number(dob.slice(6, 8)))) /
+            (365.25 * 24 * 3600 * 1000)
+        )
+      : 0;
+
+    out.push({
+      id: playerIdFor(tour, sp.player_id),
+      name,
+      country: sp.ioc ?? "",
+      ranking: rankByPlayer.get(sp.player_id) ?? 9999,
+      tour,
+      age,
+      heightCm: num(sp.height) || 0,
+      plays: sp.hand === "L" ? "Gaucher" : "Droitier",
+      ...neutralStats(),
+    });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 interface MatchAgg {
@@ -328,8 +408,8 @@ export async function getPlayerLiveStats(tour: TourKey, sackmannId: string): Pro
   const currentYear = new Date().getFullYear();
 
   const [players, rankings] = await Promise.all([
-    fetchCsv(rawUrl(tour, `${prefix}_players.csv`)),
-    fetchCsv(rawUrl(tour, `${prefix}_rankings_current.csv`)),
+    fetchCsv(sourceUrls(tour, `${prefix}_players.csv`)),
+    fetchCsv(sourceUrls(tour, `${prefix}_rankings_current.csv`)),
   ]);
 
   const sp = (players as unknown as SackmannPlayerRow[]).find((p) => p.player_id === sackmannId);
@@ -346,7 +426,7 @@ export async function getPlayerLiveStats(tour: TourKey, sackmannId: string): Pro
   let matches: Record<string, string>[] = [];
   for (const year of [currentYear, currentYear - 1]) {
     try {
-      const rows = await fetchCsv(rawUrl(tour, `${prefix}_matches_${year}.csv`));
+      const rows = await fetchCsv(sourceUrls(tour, `${prefix}_matches_${year}.csv`));
       matches = matches.concat(rows);
     } catch {
       // pas grave si une saison manque, on continue avec le reste
@@ -381,7 +461,7 @@ export async function getPlayerLiveStats(tour: TourKey, sackmannId: string): Pro
 /** Rapprochement par nom, utilisé pour retrouver l'ID Sackmann d'un joueur créé à la volée. */
 export async function findSackmannIdByName(tour: TourKey, name: string): Promise<string | null> {
   const prefix = PREFIX[tour];
-  const players = await fetchCsv(rawUrl(tour, `${prefix}_players.csv`));
+  const players = await fetchCsv(sourceUrls(tour, `${prefix}_players.csv`));
   const target = normalizeName(name);
   const found = (players as unknown as SackmannPlayerRow[]).find(
     (p) => normalizeName(`${p.name_first ?? ""} ${p.name_last ?? ""}`) === target
