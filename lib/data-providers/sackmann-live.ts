@@ -1,22 +1,35 @@
 import { parse } from "csv-parse/sync";
+import { Redis } from "@upstash/redis";
 import type { Player, Surface } from "@/lib/types";
 
 /**
- * Accès EN DIRECT aux données publiques Jeff Sackmann (github.com/JeffSackmann),
- * sans base de données et SANS CACHE : chaque appel retélécharge et reparse
- * les CSV sources. C'est un choix assumé (voulu par le porteur du projet) —
- * ça implique des temps de réponse plus longs (plusieurs secondes) que la
- * moyenne d'un site web, en échange de ne jamais stocker la moindre donnée
- * joueur nulle part.
+ * Accès EN DIRECT aux données publiques Jeff Sackmann (github.com/JeffSackmann).
  *
- * Deux niveaux de coût très différents :
- *  - `getTopPlayers` (liste top 400) : ne lit QUE les fichiers classement +
- *    fiches joueurs (petits, ~qq centaines de Ko). Rapide.
- *  - `getPlayerLiveStats` (un joueur précis) : doit en plus lire les fichiers
- *    de résultats de la saison (plusieurs Mo) pour calculer forme, winrate
- *    par surface, stats avancées. Volontairement fait à la demande, joueur
- *    par joueur, jamais pour les 400 d'un coup.
+ * `getTopPlayers` (liste top 400) est mis en cache dans Upstash Redis
+ * (le même Redis que celui utilisé pour stocker les matchs) : la source
+ * GitHub étant parfois indisponible ou lente, on garde une copie fraîche
+ * (rafraîchie toutes les 6h) et une copie "dernière version connue" sans
+ * expiration, utilisée en secours si toutes les sources échouent. Aucune
+ * stat de match n'est mise en cache — voir `getPlayerLiveStats`.
+ *
+ * `getPlayerLiveStats` (un joueur précis) reste calculé à la demande, sans
+ * cache : il lit les fichiers de résultats de la saison (plusieurs Mo) pour
+ * calculer forme, winrate par surface, stats avancées, joueur par joueur.
  */
+
+function redisIsConfigured(): boolean {
+  return Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+}
+
+let redisClient: Redis | null = null;
+function getRedis(): Redis {
+  if (!redisClient) redisClient = Redis.fromEnv();
+  return redisClient;
+}
+
+// Fallback mémoire (dev sans Upstash configuré, ou process partagé) : sert
+// aussi de secours "dernière version connue" en dehors de Redis.
+const memoryTopPlayersCache = new Map<string, Player[]>();
 
 export type TourKey = "ATP" | "WTA";
 
@@ -151,7 +164,64 @@ interface RankingRow {
  * Utilisée pour l'explorateur / la recherche, où charger les stats complètes
  * de 400 joueurs à chaque requête serait beaucoup trop lent.
  */
+const TOP_PLAYERS_TTL_SECONDS = 6 * 3600; // fraîcheur : 6h
+
+/**
+ * Liste rapide : top `TOP_N` joueurs du tour, stats neutres (non calculées).
+ * Mise en cache (voir en-tête de fichier) : sert la copie fraîche si elle
+ * existe, sinon recalcule depuis GitHub/jsDelivr et met à jour le cache.
+ * Si tout échoue, sert la dernière version connue plutôt que de planter.
+ */
 export async function getTopPlayers(tour: TourKey, limit = TOP_N): Promise<Player[]> {
+  const freshKey = `courtedge:topplayers:${tour}:${limit}`;
+  const staleKey = `courtedge:topplayers:${tour}:${limit}:stale`;
+
+  if (redisIsConfigured()) {
+    const redis = getRedis();
+    try {
+      const cached = await redis.get<Player[]>(freshKey);
+      if (cached) return cached;
+    } catch {
+      // Redis indisponible : on continue comme si le cache était vide.
+    }
+
+    try {
+      const players = await computeTopPlayers(tour, limit);
+      try {
+        await redis.set(freshKey, players, { ex: TOP_PLAYERS_TTL_SECONDS });
+        await redis.set(staleKey, players); // pas d'expiration : filet de secours
+      } catch {
+        // Échec d'écriture du cache : pas grave, on a quand même les données.
+      }
+      return players;
+    } catch (err) {
+      try {
+        const stale = await redis.get<Player[]>(staleKey);
+        if (stale) {
+          // eslint-disable-next-line no-console
+          console.error(`[getTopPlayers] sources indisponibles, secours cache pour ${tour}:`, err);
+          return stale;
+        }
+      } catch {
+        // pas de secours disponible non plus
+      }
+      throw err;
+    }
+  }
+
+  // Sans Redis configuré (dev local) : cache mémoire simple avec secours.
+  try {
+    const players = await computeTopPlayers(tour, limit);
+    memoryTopPlayersCache.set(freshKey, players);
+    return players;
+  } catch (err) {
+    const stale = memoryTopPlayersCache.get(freshKey);
+    if (stale) return stale;
+    throw err;
+  }
+}
+
+async function computeTopPlayers(tour: TourKey, limit = TOP_N): Promise<Player[]> {
   const prefix = PREFIX[tour];
   const [players, rankings] = await Promise.all([
     fetchCsv(sourceUrls(tour, `${prefix}_players.csv`)),
