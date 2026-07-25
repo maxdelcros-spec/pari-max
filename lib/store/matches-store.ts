@@ -2,8 +2,8 @@ import { Redis } from "@upstash/redis";
 import type { Player, Surface, Tour, TourCategory } from "@/lib/types";
 
 /**
- * Stockage des matchs saisis manuellement (PAS des stats joueurs, qui ne
- * sont jamais stockées — voir lib/data-providers/sackmann-live.ts).
+ * Stockage des matchs saisis manuellement (les stats joueurs, saisies elles
+ * aussi à la main, sont stockées séparément — voir players-store.ts).
  * Upstash Redis : choisi parce que c'est le plus simple à brancher sur
  * Vercel (pas de schéma, juste une clé/valeur JSON), gratuit pour ce volume.
  *

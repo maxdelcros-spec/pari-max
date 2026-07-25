@@ -7,15 +7,7 @@ import { cn } from "@/lib/utils";
 import type { Player, Surface, TourCategory } from "@/lib/types";
 import { createMatch } from "@/lib/actions/matches";
 import { searchPlayersAction } from "@/lib/actions/players";
-
-function slug(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-}
+import { PlayerStatsForm } from "./PlayerStatsForm";
 
 const CATEGORIES: TourCategory[] = ["ATP250", "ATP500", "ATP1000", "WTA250", "WTA500", "WTA1000", "GrandSlam"];
 const SURFACES: Surface[] = ["Hard", "Clay", "Grass", "Indoor Hard"];
@@ -24,6 +16,11 @@ function tourFromCategory(c: TourCategory): "ATP" | "WTA" {
   return c.startsWith("WTA") ? "WTA" : "ATP";
 }
 
+/**
+ * Sélecteur de joueur : cherche parmi les joueurs déjà enregistrés (base
+ * Redis alimentée à chaque ajout de match précédent — voir players-store.ts)
+ * ou permet d'en créer un nouveau avec toutes ses stats (PlayerStatsForm).
+ */
 function PlayerPicker({
   label,
   tour,
@@ -38,49 +35,36 @@ function PlayerPicker({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Player[]>([]);
   const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [pending, startTransition] = useTransition();
 
   useEffect(() => {
     if (!open) return;
     const t = setTimeout(() => {
       startTransition(async () => {
-        const r = await searchPlayersAction(query);
-        setResults(r.filter((p) => p.tour === tour).slice(0, 8));
+        const r = await searchPlayersAction(query, tour);
+        setResults(r.slice(0, 8));
       });
     }, 200);
     return () => clearTimeout(t);
   }, [query, open, tour]);
 
-  function handleCreate() {
-    // Joueur absent du top 400 (donc introuvable en direct) : on l'ajoute
-    // avec des stats neutres, embarquées directement dans le match au
-    // moment de l'enregistrement — aucune donnée joueur n'est stockée à part.
-    if (!query.trim()) return;
-    onChange({
-      id: `custom-${slug(query.trim())}-${Date.now().toString(36)}`,
-      name: query.trim(),
-      country: "",
-      ranking: 9999,
-      tour,
-      age: 0,
-      heightCm: 0,
-      plays: "Droitier",
-      ratings: { service: 50, retour: 50, filet: 50, endurance: 50, mental: 50, regularite: 50 },
-      formLast10: [],
-      surfaceWinPct: { Hard: 0.5, Clay: 0.5, Grass: 0.5, "Indoor Hard": 0.5 },
-      advanced: {
-        firstServeInPct: 0.6,
-        firstServeWinPct: 0.65,
-        secondServeWinPct: 0.5,
-        breakPointsSavedPct: 0.6,
-        breakPointsConvertedPct: 0.4,
-        tieBreakWinPct: 0.5,
-        decidingSetWinPct: 0.5,
-        acesPerMatch: 5,
-        doubleFaultsPerMatch: 3,
-      },
-    });
-    setOpen(false);
+  if (creating) {
+    return (
+      <div className="flex-1">
+        <label className="mb-1.5 block text-[11px] font-medium text-ink-400">{label}</label>
+        <PlayerStatsForm
+          tour={tour}
+          initialName={query}
+          onCancel={() => setCreating(false)}
+          onSave={(p) => {
+            onChange(p);
+            setCreating(false);
+            setOpen(false);
+          }}
+        />
+      </div>
+    );
   }
 
   return (
@@ -108,11 +92,11 @@ function PlayerPicker({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onFocus={() => setOpen(true)}
-              placeholder={`Rechercher un joueur ${tour}...`}
+              placeholder={`Rechercher un joueur ${tour} déjà enregistré...`}
               className="w-full rounded-lg border border-base-border bg-base-850 py-2.5 pl-9 pr-3 text-sm text-ink-50 placeholder:text-ink-600 focus:border-court-bright focus:outline-none"
             />
           </div>
-          {open && query.trim() && (
+          {open && (
             <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-base-border bg-base-900 shadow-card">
               {pending && (
                 <div className="flex items-center gap-2 px-3 py-2.5 text-[12px] text-ink-400">
@@ -120,6 +104,7 @@ function PlayerPicker({
                 </div>
               )}
               {!pending &&
+                query.trim() &&
                 results.map((p) => (
                   <button
                     key={p.id}
@@ -134,16 +119,18 @@ function PlayerPicker({
                     <span className="text-[11px] text-ink-500">#{p.ranking}</span>
                   </button>
                 ))}
-              {!pending && results.length === 0 && (
-                <button
-                  type="button"
-                  onClick={handleCreate}
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-court-bright hover:bg-base-800"
-                >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  Ajouter "{query}" comme nouveau joueur {tour}
-                </button>
+              {!pending && query.trim() && results.length === 0 && (
+                <p className="px-3 py-2.5 text-[12px] text-ink-500">Aucun joueur enregistré avec ce nom.</p>
               )}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="flex w-full items-center gap-2 border-t border-base-border px-3 py-2.5 text-left text-sm text-court-bright hover:bg-base-800"
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                Nouveau joueur {tour}
+                {query.trim() ? ` : "${query.trim()}"` : ""}
+              </button>
             </div>
           )}
         </>
@@ -268,7 +255,7 @@ export function AddMatchForm() {
         />
       </div>
 
-      <div className="flex gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row">
         <PlayerPicker label="Joueur 1" tour={tour} value={player1} onChange={setPlayer1} />
         <PlayerPicker label="Joueur 2" tour={tour} value={player2} onChange={setPlayer2} />
       </div>
@@ -326,9 +313,9 @@ export function AddMatchForm() {
         Ajouter le match
       </button>
       <p className="text-[11px] leading-relaxed text-ink-600">
-        Les probabilités et le value bet sont calculés à partir des stats du joueur au moment
-        de l'ajout. Un joueur absent du top 400 (donc introuvable en direct) démarre avec des
-        valeurs neutres.
+        Un joueur créé ici est enregistré dans la base au moment de la validation du match, avec
+        toutes ses stats — il sera ensuite proposé directement dans la recherche pour tes prochains
+        matchs, sans avoir à les ressaisir.
       </p>
     </form>
   );

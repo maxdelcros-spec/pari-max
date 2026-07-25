@@ -2,6 +2,7 @@
 
 import type { Player, Surface, Tour, TourCategory } from "@/lib/types";
 import { saveMatch, deleteMatch as deleteMatchFromStore, type StoredMatch } from "@/lib/store/matches-store";
+import { savePlayer } from "@/lib/store/players-store";
 
 // Code requis pour ajouter/supprimer un match. Personnalisable via la
 // variable d'env MATCHES_ACCESS_CODE (sinon "0000" par défaut).
@@ -39,12 +40,10 @@ export interface CreateMatchInput {
 }
 
 /**
- * Enregistre un match. Les deux joueurs sont stockés tels quels (snapshot
- * de leurs stats au moment de l'ajout) : il n'existe pas de table "players"
- * séparée, puisque les stats ne sont jamais persistées (voir
- * lib/data-providers/sackmann-live.ts). Le dashboard, lui, va chercher les
- * stats à jour en direct à chaque affichage — seul ce snapshot du match
- * (tournoi, cotes, H2H) est conservé.
+ * Enregistre un match. Le snapshot complet des deux joueurs (au moment de
+ * l'ajout) est conservé avec le match — l'analyse reste donc figée à cet
+ * instant. Les deux joueurs sont aussi (ré)enregistrés dans la base
+ * joueurs séparée (players-store.ts) pour être réutilisables plus tard.
  */
 export async function createMatch(input: CreateMatchInput) {
   checkAccessCode(input.accessCode);
@@ -72,6 +71,11 @@ export async function createMatch(input: CreateMatchInput) {
   };
 
   await saveMatch(match);
+  // Les deux joueurs sont (re)enregistrés dans la base joueurs à chaque
+  // ajout de match : un nouveau joueur y entre pour la première fois, un
+  // joueur déjà connu voit son snapshot mis à jour avec ses stats les plus
+  // récentes — utile pour la recherche des prochains matchs.
+  await Promise.all([savePlayer(input.player1), savePlayer(input.player2)]);
   return { id };
 }
 

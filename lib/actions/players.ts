@@ -1,26 +1,19 @@
 "use server";
 
-import { dataProvider } from "@/lib/data-providers";
+import { searchPlayers } from "@/lib/store/players-store";
 import type { Player } from "@/lib/types";
 
-/** Liste rapide (top 400 ATP/WTA), stats neutres tant qu'on n'a pas sélectionné le joueur. */
-export async function searchPlayersAction(query: string): Promise<Player[]> {
+/**
+ * Recherche parmi les joueurs déjà enregistrés (saisis à la main lors d'un
+ * ajout de match précédent) — plus de source live externe. `tour` filtre
+ * ATP/WTA quand fourni (utilisé par le sélecteur du formulaire d'ajout).
+ */
+export async function searchPlayersAction(query: string, tour?: "ATP" | "WTA"): Promise<Player[]> {
   try {
-    return await dataProvider.searchPlayers(query);
+    return await searchPlayers(query, tour);
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error("[searchPlayersAction] échec:", err);
     return [];
-  }
-}
-
-/** Stats complètes calculées en direct (aucun cache) — appelée à la sélection d'un joueur. */
-export async function getPlayerLiveStatsAction(id: string): Promise<Player | null> {
-  try {
-    return await dataProvider.getPlayerById(id);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error("[getPlayerLiveStatsAction] échec:", err);
-    return null;
   }
 }

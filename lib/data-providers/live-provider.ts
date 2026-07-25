@@ -1,7 +1,7 @@
 import type { Match, Player } from "@/lib/types";
 import { predictMatch } from "@/lib/calc/predict";
 import { listMatches, getMatch, type StoredMatch } from "@/lib/store/matches-store";
-import { searchTopPlayers, getPlayerLiveStats, parsePlayerId } from "./sackmann-live";
+import { searchPlayers as searchStoredPlayers, getPlayer as getStoredPlayer } from "@/lib/store/players-store";
 import type { DataProvider } from "./types";
 
 function buildMatch(stored: StoredMatch): Match {
@@ -39,6 +39,12 @@ function buildMatch(stored: StoredMatch): Match {
   };
 }
 
+/**
+ * Implémentation unique. Les matchs ET les joueurs sont désormais saisis à
+ * la main et stockés dans Upstash Redis (voir lib/store/matches-store.ts et
+ * lib/store/players-store.ts) — plus aucune source externe (l'ancienne
+ * source live Jeff Sackmann a été retirée).
+ */
 export class LiveDataProvider implements DataProvider {
   async getUpcomingMatches(): Promise<Match[]> {
     const stored = await listMatches();
@@ -50,15 +56,12 @@ export class LiveDataProvider implements DataProvider {
     return stored ? buildMatch(stored) : null;
   }
 
-  /** Recherche dans le top 400 ATP + top 400 WTA, en direct (voir sackmann-live.ts). */
+  /** Recherche parmi les joueurs déjà saisis à la main (voir players-store.ts). */
   async searchPlayers(query: string): Promise<Player[]> {
-    return searchTopPlayers(query);
+    return searchStoredPlayers(query);
   }
 
-  /** Stats complètes calculées en direct pour un joueur du top 400. */
   async getPlayerById(id: string): Promise<Player | null> {
-    const parsed = parsePlayerId(id);
-    if (!parsed) return null;
-    return getPlayerLiveStats(parsed.tour, parsed.sackmannId);
+    return getStoredPlayer(id);
   }
 }

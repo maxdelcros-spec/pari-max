@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutGrid,
-  Search,
   Target,
   History,
   Wallet,
@@ -18,7 +17,6 @@ const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutGrid },
   { href: "/matches/new", label: "Ajouter un match", icon: PlusCircle },
   { href: "/value-bets", label: "Value Bets", icon: Target },
-  { href: "/players", label: "Joueurs", icon: Search },
   { href: "/history", label: "Historique", icon: History },
   { href: "/bankroll", label: "Bankroll", icon: Wallet },
   { href: "/methodology", label: "Méthodologie", icon: BookOpen },
